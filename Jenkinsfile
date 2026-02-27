@@ -6,7 +6,7 @@ pipeline {
         SERVER_IP   = "15.164.211.251"
         SERVER_USER = "ubuntu"
         APP_DIR     = "~/app"
-        JAR_NAME    = "Jenkins-0.0.1-SNAPSHOT.jar"
+        JAR_NAME    = "jenkins-0.0.1-SNAPSHOT.jar"
     }
 
     stages {
