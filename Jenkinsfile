@@ -1,81 +1,69 @@
 pipeline {
     agent any
 
-    // 전역변수 => ${SERVER_IP}
     environment {
-        SERVER_IP   = "15.164.211.251"
-        SERVER_USER = "ubuntu"
-        APP_DIR     = "~/app"
-        JAR_NAME    = "jenkins-0.0.1-SNAPSHOT.jar"
+        DOCKER_IMAGE = "dorapizza/spring-jenkins"
+        SERVER_IP = "15.164.211.251"
+        APP_DIR = "~/app"
+    }
+
+    tools {
+        jdk 'jdk17'
     }
 
     stages {
 
-        /*
-        // 연결 확인 = ngrok
-        stage('Check Git Info') {
+        stage('Checkout') {
             steps {
-                sh '''
-                    echo "===Git Info==="
-                    git branch
-                    git log -1
-                '''
-            }
-        }
-        */
-
-        // 감지 = main : push (commit)
-        stage('Check Out') {
-            steps {
-                echo 'Git Checkout'
                 checkout scm
             }
         }
 
-        // gradle build => jar파일을 다시 생성
-        stage('Gradle Permission') {
+        stage('Build with Gradle') {
             steps {
-                sh '''
-                    chmod +x gradlew
-                '''
+                sh 'chmod +x ./gradlew'
+                sh './gradlew clean build'
             }
         }
 
-        // build 시작
-        stage('Gradle Build') {
+        stage('Docker Build & Push') {
             steps {
-                sh '''
-                    ./gradlew clean build
-                '''
-            }
-        }
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub_info',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
 
-        // jar파일 전송 = rsync / scp
-        stage('Deploy = rsync') {
-            steps {
-                sshagent(credentials: ['SERVER_SSH_KEY']) {
-                    sh """
-                        rsync -avz -e 'ssh -o StrictHostKeyChecking=no' \
-                        build/libs/*.jar \
-                        ${SERVER_USER}@${SERVER_IP}:${APP_DIR}
-                    """
+                    sh '''
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                        docker build -t $DOCKER_IMAGE:latest .
+                        docker push $DOCKER_IMAGE:latest
+                    '''
                 }
             }
         }
 
-        // 실행 명령
-        stage('Run Application') {
+        stage('Deploy with Docker Compose') {
             steps {
-                sshagent(credentials: ['SERVER_SSH_KEY']) {
+                sshagent(['SERVER_SSH_KEY']) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_IP} << 'EOF'
-                        pkill -f "java -jar" || true
-                        nohup java -jar ~/app/${JAR_NAME} > log.txt 2>&1 &
-EOF
+                        ssh -o StrictHostKeyChecking=no ubuntu@$SERVER_IP '
+                            cd $APP_DIR
+                            docker compose pull
+                            docker compose up -d --force-recreate
+                        '
                     """
                 }
             }
         }
+    }
 
+    post {
+        success {
+            echo "Compose deployment completed successfully."
+        }
+        failure {
+            echo "Deployment failed."
+        }
     }
 }
