@@ -1,69 +1,111 @@
 pipeline {
-    agent any
-
-    environment {
-        DOCKER_IMAGE = "dorapizza/spring-jenkins"
-        SERVER_IP = "15.164.211.251"
-        APP_DIR = "~/app"
-    }
-
-    tools {
-        jdk 'jdk17'
-    }
-
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
-
-        stage('Build with Gradle') {
-            steps {
-                sh 'chmod +x ./gradlew'
-                sh './gradlew clean build'
-            }
-        }
-
-        stage('Docker Build & Push') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub_info',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
-
-                    sh '''
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker build -t $DOCKER_IMAGE:latest .
-                        docker push $DOCKER_IMAGE:latest
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy with Docker Compose') {
-            steps {
-                sshagent(['SERVER_SSH_KEY']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ubuntu@$SERVER_IP '
-                            cd $APP_DIR
-                            docker compose pull
-                            docker compose up -d --force-recreate
-                        '
-                    """
-                }
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "Compose deployment completed successfully."
-        }
-        failure {
-            echo "Deployment failed."
-        }
-    }
+	agent any
+	
+	// 전역변수 => ${SERVER_IP}
+	environment {
+			APP_DIR = "~/app"
+			JAR_NAME = "Jenkins-0.0.1-SNAPSHOT.jar"
+	}
+		
+	stages {
+		/*
+			git push = commit
+			    |
+			web hooks / poll
+			    |
+			 jenkins (local)
+			    |
+			  build
+			    |
+			  docker build
+			  docker push
+			    |
+			  minikube
+			    | deployment.yaml update
+			  브라우저 실행
+		*/
+		/*
+		 연결 확인 = ngrok
+		 stage('Check Git Info') {
+			steps {
+				sh '''
+				    echo "===Git Info==="
+				    git branch
+				    git log -1
+				   '''
+			}
+		}*/
+		
+		// 감지 = main : push (commit)
+		stage('Check Out') {
+			steps {
+				 echo 'Git Checkout'
+                 checkout scm
+			}
+		}
+		
+		// gradle build => jar파일을 다시 생성 
+		stage('Gradle Permission') {
+			steps {
+				sh '''
+				    chmod +x gradlew
+				   '''
+			}
+		}
+		
+		// build 시작 
+		stage('Gradle Build') {
+			steps {
+				sh '''
+				    ./gradlew clean build
+				   '''
+			}
+		}
+		
+		// Docker Build 
+		stage('Docker Build') {
+			steps {
+				sh '''
+					docker build -t dorapizza/spring-jenkins .
+				   '''
+			}
+		}
+		
+		stage('Docker Login') {
+		  	steps {
+		   		 withCredentials([usernamePassword(
+		        	credentialsId: 'dockerhub_info',
+		       		usernameVariable: 'DH_USER',
+		        	passwordVariable: 'DH_PASS'
+		    )]) {
+		     	 sh '''
+		       		 echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+		      		'''
+		    	}
+		  	}
+		}
+		
+		// Docker Push
+		stage('Docker Push') {
+		  	steps {
+		    	sh '''
+		      		docker push tjdudgkr0959/spring-jenkins:latest
+		    	'''
+		  	}
+		}
+		
+		// 실행 명령 
+		
+		stage('Deploy to MiniKube') {
+			steps {
+				sh '''
+					kubectl delete deployment myapp || true
+					sudo -u sist /usr/local/bin/kubectl apply -f /var/lib/jenkins/k8s/deployment.yaml
+					sudo -u sist /usr/local/bin/kubectl rollout restart deployment/myapp-deployment
+					sudo -u sist /usr/local/bin/kubectl rollout status deployment/myapp-deployment
+				   '''
+			}
+		}
+		
+	}
 }
